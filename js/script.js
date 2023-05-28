@@ -2,18 +2,19 @@ function Db() {
   const self = this;
 
   self.save = function (data) {
-    localStorage.setItem("todo", data);
+    localStorage.setItem("shtd", data);
   };
 
   self.loadTodo = function () {
-    return localStorage.getItem("todo");
+    return localStorage.getItem("shtd");
   };
 }
 
 function Task(name) {
   const self = this;
   let _name = name;
-  let _time = new Date();
+  let _time = new Date(0);
+  let _limit = new Date(300000);
 
   self.getName = function () {
     return _name;
@@ -21,10 +22,19 @@ function Task(name) {
 
   self.updateTime = function (time) {
     _time = time;
+    if (_limit.getTime() > 0 && _limit <= time) {
+      let audio = new Audio("./sounds/bell.mp3");
+      audio.play();
+      _limit = new Date(0);
+    }
   };
 
   self.getLimit = function () {
-    return new Date(300000);
+    return _limit;
+  };
+
+  self.clearLimit = function () {
+    _limit = new Date(0);
   };
 
   self.getTime = function () {
@@ -34,6 +44,7 @@ function Task(name) {
   self.serialize = function () {
     return JSON.stringify({
       name: _name,
+      limit: _limit.getTime(),
       time: _time.getTime(),
     });
   };
@@ -41,6 +52,7 @@ function Task(name) {
   self.deserialize = function (data) {
     const task = JSON.parse(data);
     _name = task.name;
+    _limit = new Date(task.limit);
     _time = new Date(task.time);
   };
 
@@ -99,12 +111,12 @@ function DbTasks() {
 
   self.add = function (task) {
     _tasks.add(task);
-    _db.save(_tasks.serialize());
+    self.save();
   };
 
   self.remove = function (task) {
     _tasks.remove(task);
-    _db.save(_tasks.serialize());
+    self.save();
   };
 
   self.asArray = function () {
@@ -114,6 +126,10 @@ function DbTasks() {
   function loadTasks() {
     _tasks.desirialize(_db.loadTodo());
   }
+
+  self.save = function () {
+    _db.save(_tasks.serialize());
+  };
 
   loadTasks();
 }
@@ -137,7 +153,7 @@ function TaskDescription(task) {
 function TaskListItem(task) {
   const self = this;
   const _task = task;
-  const _actions = new TaskActions();
+  const _actions = new TaskActions(task);
   const _taskDescription = TaskDescription(task);
   const _timer = new TimerControl(task);
   _taskDescription.appendChild(_timer.getControl());
@@ -147,8 +163,18 @@ function TaskListItem(task) {
   _control.appendChild(_actions.getControl());
   _control.classList.add("tasks_view__item");
 
-  self.onRemove = function (callbak) {
-    closeCallback = callbak;
+  self.onRemove = function (callback) {
+    if (callback) {
+      _taskDescription.addEventListener("removeTask", () => {
+        callback(self);
+      });
+    }
+  };
+
+  self.onUpdate = function (callback) {
+    if (callback) {
+      _control.addEventListener("taskUpdated", callback);
+    }
   };
 
   self.getTask = function () {
@@ -158,12 +184,6 @@ function TaskListItem(task) {
   self.getControl = function () {
     return _control;
   };
-
-  _taskDescription.addEventListener("removeTask", () => {
-    if (closeCallback) {
-      closeCallback(self);
-    }
-  });
 
   _taskDescription.onclick = function () {
     if (_control.classList.contains("tasks_view__item-checked")) {
@@ -175,14 +195,17 @@ function TaskListItem(task) {
 
   _actions.getControl().addEventListener("startTask", () => {
     _timer.start();
+    _control.dispatchEvent(new CustomEvent("taskUpdated"));
   });
 
   _actions.getControl().addEventListener("pauseTask", () => {
     _timer.pause();
+    _control.dispatchEvent(new CustomEvent("taskUpdated"));
   });
 
   _actions.getControl().addEventListener("resumeTask", () => {
     _timer.resume();
+    _control.dispatchEvent(new CustomEvent("taskUpdated"));
   });
 
   _control.onclick = function () {
@@ -209,6 +232,7 @@ function TaskList() {
   function showTask(task) {
     const item = new TaskListItem(task);
     item.onRemove(self.remove);
+    item.onUpdate(_tasks.save);
     _control.appendChild(item.getControl());
   }
 
@@ -226,11 +250,11 @@ function TaskList() {
   showTasks();
 }
 
-function Timer() {
+function Timer(time) {
   const self = this;
   let _callback = null;
   let _interval = null;
-  let _time = 0;
+  let _time = time ? time.getTime() : 0;
   let _start = new Date();
 
   self.start = function () {
@@ -257,15 +281,17 @@ function Timer() {
   };
 }
 
-function TaskActions() {
+function TaskActions(task) {
   const self = this;
   const _control = document.createElement("div");
   _control.classList.add("task_timer");
 
-  const start = createButton("Start");
+  const start =
+    task.getTime() > new Date(0)
+      ? createButton("Resume")
+      : createButton("Start");
 
   start.onclick = function (e) {
-    e.preventDefault();
     if (start.innerText === "Start") {
       _control.dispatchEvent(new CustomEvent("startTask"));
       start.innerText = "Pause";
@@ -303,7 +329,7 @@ function TaskActions() {
 function TimerControl(task) {
   const self = this;
   const _task = task;
-  const _timer = new Timer();
+  const _timer = new Timer(task.getTime());
   const _timeControl = document.createElement("span");
   _timeControl.classList.add("task_time");
 
@@ -326,20 +352,11 @@ function TimerControl(task) {
   _timer.onEvent(update);
 
   function update(time) {
-    checkLimit(time);
+    _task.updateTime(time);
     const hours = format(time.getUTCHours());
     const minutes = format(time.getUTCMinutes());
     const seconds = format(time.getUTCSeconds());
     _timeControl.innerText = `${hours}:${minutes}:${seconds}`;
-  }
-
-  function checkLimit(time) {
-    if (_task.getLimit() > 0 && _task.getLimit() <= time) {
-      let audio = new Audio("./sounds/bell.mp3");
-      audio.play();
-      _limit = 0;
-    }
-    _task.updateTime(time);
   }
 
   function format(data) {
@@ -348,6 +365,8 @@ function TimerControl(task) {
     }
     return `${data}`;
   }
+
+  update(_task.getTime());
 }
 
 function Application() {
